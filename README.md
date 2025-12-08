@@ -37,7 +37,8 @@ This service connects WhatsApp Web to your server.
 3.  Create `.env` file:
     ```env
     PORT=3000
-    API_KEY=my_super_secret_key_123
+	API_KEY=my_super_secret_key_123
+	WEBHOOK_SECRET=my_super_secret_key_123
     ```
 4.  Start the service:
     ```bash
