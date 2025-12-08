@@ -1,5 +1,5 @@
 /**
- * WHMCS WhatsApp Gateway Service
+ * WHMCS WhatsApp Gateway Service (Fix Real Number)
  */
 require('dotenv').config();
 const fs = require('fs');
@@ -51,20 +51,37 @@ function startClient() {
     client.on('ready', () => { console.log('WhatsApp Client Ready!'); isConnected = true; qrCodeUrl = null; });
     client.on('disconnected', () => { console.log("Client Disconnected"); isConnected = false; client.initialize(); });
 
+    // --- BAGIAN INI YANG DIPERBAIKI (FIX REAL NUMBER) ---
     client.on('message', async msg => {
+        // Abaikan status update atau pesan grup
         if(msg.from.includes('@g.us') || msg.isStatus) return;
         if(!botConfig.webhookUrl) return;
 
         try {
+            // AMBIL KONTAK ASLI UNTUK DAPATKAN NOMOR HP REAL
+            const contact = await msg.getContact();
+            
+            // Prioritas: Ambil nomor dari contact.id.user (ini nomor asli)
+            // Jika gagal, baru ambil dari msg.from
+            let realNumber = contact.id ? contact.id.user : msg.from.replace(/\D/g, '');
+
+            // Pastikan format bersih (hanya angka)
+            realNumber = realNumber.replace(/\D/g, '');
+
+            console.log(`Debug ID: ${msg.from} -> Real Number: ${realNumber}`);
+
             await axios.post(botConfig.webhookUrl, {
                 action: 'incoming_message',
-                phone: msg.from.replace('@c.us', ''),
+                phone: realNumber, // Kirim nomor yang sudah diperbaiki
                 message: msg.body,
                 secret: botConfig.apiKey
             });
-            console.log(`Webhook sent: ${msg.from}`);
-        } catch (e) { console.error('Webhook Error:', e.message); }
+            console.log(`Webhook sent: ${realNumber}`);
+        } catch (e) { 
+            console.error('Webhook Error:', e.message); 
+        }
     });
+    // ----------------------------------------------------
 
     client.initialize();
 }
@@ -81,15 +98,6 @@ const processQueue = async () => {
     isProcessing = false;
     processQueue();
 };
-
-
-app.get('/', (req, res) => {
-    res.json({
-        "status": "error",
-		"code": 401,
-		"message": "Unauthorized: please provide valid authentication credentials."
-    });
-});
 
 app.get('/status', (req, res) => {
     res.json({
