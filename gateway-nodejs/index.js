@@ -1,8 +1,9 @@
 /**
- * WHMCS WhatsApp Gateway Service (Fix Real Number)
+ * WHMCS WhatsApp Gateway Service (Stable Logout)
  */
 require('dotenv').config();
 const fs = require('fs');
+const path = require('path'); // Tambahan untuk path folder
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const express = require('express');
@@ -15,6 +16,7 @@ app.use(cors());
 app.use(bodyParser.json());
 
 const CONFIG_FILE = './saved_config.json';
+const AUTH_DIR = './.wwebjs_auth'; // Lokasi folder session
 
 let botConfig = {
     port: process.env.PORT || 3000,
@@ -40,50 +42,64 @@ let isConnected = false;
 let messageQueue = [];
 let isProcessing = false;
 
+// Fungsi untuk inisialisasi Client
 function startClient() {
     client = new Client({
-        authStrategy: new LocalAuth({ dataPath: './.wwebjs_auth' }),
-        puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox'], headless: true },
+        authStrategy: new LocalAuth({ dataPath: AUTH_DIR }),
+        puppeteer: { 
+            args: ['--no-sandbox', '--disable-setuid-sandbox'], 
+            headless: true 
+        },
         webVersionCache: { type: 'remote', remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html' }
     });
 
-    client.on('qr', async (qr) => { qrCodeUrl = await qrcode.toDataURL(qr); isConnected = false; console.log("QR Generated"); });
-    client.on('ready', () => { console.log('WhatsApp Client Ready!'); isConnected = true; qrCodeUrl = null; });
-    client.on('disconnected', () => { console.log("Client Disconnected"); isConnected = false; client.initialize(); });
+    client.on('qr', async (qr) => { 
+        console.log("QR Generated");
+        qrCodeUrl = await qrcode.toDataURL(qr); 
+        isConnected = false; 
+    });
 
-    // --- BAGIAN INI YANG DIPERBAIKI (FIX REAL NUMBER) ---
+    client.on('ready', () => { 
+        console.log('WhatsApp Client Ready!'); 
+        isConnected = true; 
+        qrCodeUrl = null; 
+    });
+
+    client.on('disconnected', (reason) => { 
+        console.log("Client Disconnected:", reason); 
+        isConnected = false; 
+        qrCodeUrl = null;
+        // Jangan langsung startClient disini, biarkan logic logout yang handle atau manual restart
+        setTimeout(() => {
+            if(!client) startClient();
+        }, 5000);
+    });
+
     client.on('message', async msg => {
-        // Abaikan status update atau pesan grup
         if(msg.from.includes('@g.us') || msg.isStatus) return;
         if(!botConfig.webhookUrl) return;
 
         try {
-            // AMBIL KONTAK ASLI UNTUK DAPATKAN NOMOR HP REAL
             const contact = await msg.getContact();
-            
-            // Prioritas: Ambil nomor dari contact.id.user (ini nomor asli)
-            // Jika gagal, baru ambil dari msg.from
             let realNumber = contact.id ? contact.id.user : msg.from.replace(/\D/g, '');
-
-            // Pastikan format bersih (hanya angka)
             realNumber = realNumber.replace(/\D/g, '');
 
-            console.log(`Debug ID: ${msg.from} -> Real Number: ${realNumber}`);
+            console.log(`Debug ID: ${msg.from} -> Real: ${realNumber}`);
 
             await axios.post(botConfig.webhookUrl, {
                 action: 'incoming_message',
-                phone: realNumber, // Kirim nomor yang sudah diperbaiki
+                phone: realNumber,
                 message: msg.body,
                 secret: botConfig.apiKey
             });
             console.log(`Webhook sent: ${realNumber}`);
-        } catch (e) { 
-            console.error('Webhook Error:', e.message); 
-        }
+        } catch (e) { console.error('Webhook Error:', e.message); }
     });
-    // ----------------------------------------------------
 
-    client.initialize();
+    client.initialize().catch(err => {
+        console.error("Init Error:", err.message);
+        // Retry logic could go here
+    });
 }
 
 const processQueue = async () => {
@@ -98,6 +114,8 @@ const processQueue = async () => {
     isProcessing = false;
     processQueue();
 };
+
+// --- ROUTES ---
 
 app.get('/status', (req, res) => {
     res.json({
@@ -126,9 +144,41 @@ app.post('/send', (req, res) => {
     res.json({status:'queued'});
 });
 
+// --- BAGIAN INI YANG DIPERBAIKI (FORCE LOGOUT) ---
 app.post('/logout', async (req, res) => {
     if(req.body.secret !== botConfig.apiKey) return res.status(403).json({error:'Invalid Key'});
-    try { await client.logout(); res.json({status:'ok'}); } catch(e){ res.status(500).json({error:e.message}); }
+    
+    console.log("Logout requested...");
+    res.json({status:'ok', message: 'Logout process started'}); // Respon duluan agar WHMCS tidak timeout/error
+
+    try {
+        // 1. Coba Logout Normal
+        if (client) {
+            try { await client.logout(); } catch(e) { console.log("Graceful logout failed, forcing destroy."); }
+            try { await client.destroy(); } catch(e) { console.log("Destroy failed."); }
+        }
+    } catch (e) {
+        console.error("Logout Error Handler:", e.message);
+    } finally {
+        // 2. FORCE DELETE SESSION FILES
+        // Ini wajib agar saat start ulang, dia minta scan QR, bukan nyambung ke sesi error
+        try {
+            if (fs.existsSync(AUTH_DIR)) {
+                fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+                console.log("Session folder deleted.");
+            }
+        } catch (err) {
+            console.error("Failed to delete session folder:", err.message);
+        }
+
+        // 3. Reset Variables & Restart
+        client = null;
+        isConnected = false;
+        qrCodeUrl = null;
+        
+        console.log("Restarting client...");
+        setTimeout(startClient, 2000); // Jeda 2 detik sebelum start ulang
+    }
 });
 
 startClient();

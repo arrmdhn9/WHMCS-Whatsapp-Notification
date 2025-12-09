@@ -1,4 +1,6 @@
-# 🚀 WHMCS WhatsApp Gateway (Open Source) | Build With GeminiAI
+<img width="1280" height="842" alt="WhatsApp Image 2025-12-08 at 12 51 31_91e11d7f" src="https://github.com/user-attachments/assets/d2645c8b-2ff8-44cf-a82a-2c487d8626d1" />
+
+# 🚀 WHMCS WhatsApp Gateway (Open Source) - Build With GeminiAI
 
 A powerful, open-source WhatsApp integration module for WHMCS. Send notifications to clients, manage invoices, and reply to support tickets directly from WhatsApp.
 
